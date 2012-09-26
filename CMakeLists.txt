@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 2.8)
 
-project(kfusion)
+project(kfusion_asus)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
@@ -34,14 +34,14 @@ cuda_add_library(kfusion SHARED
 	-O3
 	)
 
-if (GLUT_FOUND AND FREENECT_FOUND)
+if (GLUT_FOUND)
 	
-	include_directories(${FREENECT_INCLUDE_PATHS})
+        include_directories(${PANGOLIN_INCLUDE_PATHS})
 
 	add_executable(kfusion_kinect
 		kinect.cpp
 		)
-	target_link_libraries(kfusion_kinect kfusion ${FREENECT_LIBRARIES} ${GLUT_LIBRARIES} ${OPENGL_LIBRARIES} ) 
+        target_link_libraries(kfusion_kinect kfusion pangolin ${GLUT_LIBRARIES} ${OPENGL_LIBRARIES} )
 
 endif()
 

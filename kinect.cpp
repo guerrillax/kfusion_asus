@@ -1,9 +1,12 @@
+#include <GL/glew.h>
+
 #include "kfusion.h"
 #include "helpers.h"
 
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+
 
 #ifdef __APPLE__
 #include <GLUT/glut.h>
@@ -18,62 +21,45 @@ using namespace TooN;
 
 #include <libfreenect/libfreenect.h>
 
-freenect_context *f_ctx;
-freenect_device *f_dev;
-bool gotDepth;
+#include <pangolin/pangolin.h>
+#include <pangolin/video.h>
 
-void depth_cb(freenect_device *dev, void *v_depth, uint32_t timestamp)
-{
-    gotDepth = true;
-}
+
+pangolin::VideoInput * video;
+uint16_t * depth_ptr;
+uint8_t * img;
+
+
 
 int InitKinect( uint16_t * buffer ){
-    if (freenect_init(&f_ctx, NULL) < 0) {
-        cout << "freenect_init() failed" << endl;
-        return 1;
-    }
+  depth_ptr = buffer;
 
-    freenect_set_log_level(f_ctx, FREENECT_LOG_WARNING);
-    freenect_select_subdevices(f_ctx, (freenect_device_flags)(FREENECT_DEVICE_MOTOR | FREENECT_DEVICE_CAMERA));
+  std::string uri = "openni:[img1=depth]//0";
+  video = new pangolin::VideoInput(uri);
 
-    int nr_devices = freenect_num_devices (f_ctx);
-    cout << "Number of devices found: " << nr_devices << endl;
-
-    if (nr_devices < 1)
-        return 1;
-
-    if (freenect_open_device(f_ctx, &f_dev, 0) < 0) {
-        cout << "Could not open device" << endl;
-        return 1;
-    }
-
-    freenect_set_depth_callback(f_dev, depth_cb);
-    freenect_set_depth_mode(f_dev, freenect_find_depth_mode(FREENECT_RESOLUTION_MEDIUM, FREENECT_DEPTH_11BIT));
-    freenect_set_depth_buffer(f_dev, buffer);
-    freenect_start_depth(f_dev);
-
-    gotDepth = false;
-
-    return 0;
+  img = new unsigned char[video->SizeBytes()];
+  
+  return 0;
 }
 
 void CloseKinect(){
-    freenect_stop_depth(f_dev);
-    freenect_close_device(f_dev);
-    freenect_shutdown(f_ctx);
+
 }
 
 void DepthFrameKinect() {
-    while (!gotDepth && freenect_process_events(f_ctx) >= 0){
-    }
-    gotDepth = false;
+  
+
+  video->GrabNext(img,true);
+  memcpy(depth_ptr, img, video->SizeBytes());
+
+
 }
 
 KFusion kfusion;
 Image<uchar4, HostDevice> lightScene, depth, lightModel;
 Image<uint16_t, HostDevice> depthImage;
 
-const float3 light = make_float3(1.0, -2, 1.0);
+float3 translation = make_float3(1.0, -2, 1.0);
 const float3 ambient = make_float3(0.1, 0.1, 0.1);
 
 SE3<float> initPose;
@@ -82,58 +68,69 @@ int counter = 0;
 bool reset = true;
 
 void display(void){
-    const uint2 imageSize = kfusion.configuration.inputSize;
-    static bool integrate = true;
+  const uint2 imageSize = kfusion.configuration.inputSize;
+  static bool integrate = true;
 
-    glClear( GL_COLOR_BUFFER_BIT );
-    const double startFrame = Stats.start();
+  glClear( GL_COLOR_BUFFER_BIT );
+  const double startFrame = Stats.start();
 
-    DepthFrameKinect();
-    const double startProcessing = Stats.sample("kinect");
+  DepthFrameKinect();
+  const double startProcessing = Stats.sample("kinect");
 
-    kfusion.setKinectDeviceDepth(depthImage.getDeviceImage());
-    Stats.sample("raw to cooked");
+  kfusion.setKinectDeviceDepth(depthImage.getDeviceImage());
+  Stats.sample("raw to cooked");
 
-    integrate = kfusion.Track();
-    Stats.sample("track");
+  integrate = kfusion.Track();
+  Stats.sample("track");
 
-        if(integrate || reset){
-            kfusion.Integrate();
-            Stats.sample("integrate");
-            reset = false;
-        }
+  if(integrate || reset){
+    kfusion.Integrate();
+    Stats.sample("integrate");
+    reset = false;
+  }
 
-    renderLight( lightModel.getDeviceImage(), kfusion.vertex, kfusion.normal, light, ambient);
-    renderLight( lightScene.getDeviceImage(), kfusion.inputVertex[0], kfusion.inputNormal[0], light, ambient );
-    renderTrackResult( depth.getDeviceImage(), kfusion.reduction );
-    cudaDeviceSynchronize();
+  translation = kfusion.pose.get_translation();
 
-    Stats.sample("render");
 
-    glClear(GL_COLOR_BUFFER_BIT);
-    glRasterPos2i(0,imageSize.y * 0);
-    glDrawPixels(lightScene);
-    glRasterPos2i(imageSize.x, imageSize.y * 0);
-    glDrawPixels(depth);
-    glRasterPos2i(0,imageSize.y * 1);
-    glDrawPixels(lightModel);
-    const double endProcessing = Stats.sample("draw");
+//  if (translation.x<=0.75 || translation.x>=1.25 ||
+//      translation.y<=0.75 || translation.y>=1.25 ||
+//      translation.z<=-0.25 || translation.z>=0.25)
+//  {
+//    kfusion.Reset();
+//    kfusion.setPose(toMatrix4(initPose));
+//    reset = true;
+//  }
+  renderLight( lightModel.getDeviceImage(), kfusion.vertex, kfusion.normal, translation, ambient);
+  renderLight( lightScene.getDeviceImage(), kfusion.inputVertex[0], kfusion.inputNormal[0], translation, ambient );
+  renderTrackResult( depth.getDeviceImage(), kfusion.reduction );
+  cudaDeviceSynchronize();
 
-    Stats.sample("total", endProcessing - startFrame, PerfStats::TIME);
-    Stats.sample("total_proc", endProcessing - startProcessing, PerfStats::TIME);
+  Stats.sample("render");
 
-    if(printCUDAError())
-        exit(1);
+  glClear(GL_COLOR_BUFFER_BIT);
+  glRasterPos2i(0,imageSize.y * 0);
+  glDrawPixels(lightScene);
+  glRasterPos2i(imageSize.x, imageSize.y * 0);
+  glDrawPixels(depth);
+  glRasterPos2i(0,imageSize.y * 1);
+  glDrawPixels(lightModel);
+  const double endProcessing = Stats.sample("draw");
 
-    ++counter;
+  Stats.sample("total", endProcessing - startFrame, PerfStats::TIME);
+  Stats.sample("total_proc", endProcessing - startProcessing, PerfStats::TIME);
 
-    if(counter % 50 == 0){
-        Stats.print();
-        Stats.reset();
-        cout << endl;
-    }
+  if(printCUDAError())
+    exit(1);
 
-    glutSwapBuffers();
+  ++counter;
+
+  if(counter % 50 == 0){
+    Stats.print();
+    Stats.reset();
+    cout << endl;
+  }
+
+  glutSwapBuffers();
 }
 
 void idle(void){
@@ -189,9 +186,12 @@ int main(int argc, char ** argv) {
     config.mu = 0.1;
     config.combinedTrackAndReduce = false;
 
-    // change the following parameters for using 640 x 480 input images
-    config.inputSize = make_uint2(320,240); 
-    config.camera =  make_float4(297.12732, 296.24240, 169.89365, 121.25151);
+  // change the following parameters for using 640 x 480 input images
+  //    config.inputSize = make_uint2(320,240);
+  //    config.camera =  make_float4(297.12732, 296.24240, 169.89365, 121.25151);
+  config.inputSize = make_uint2(640,480);
+  config.camera =  make_float4(297.12732*2., 296.24240*2.,
+                               169.89365*2., 121.25151*2.);
 
     // config.iterations is a vector<int>, the length determines
     // the number of levels to be used in tracking

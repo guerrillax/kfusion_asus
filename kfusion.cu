@@ -101,7 +101,9 @@ __global__ void vertex2normal( Image<float3> normal, const Image<float3> vertex 
 }
 
 __forceinline__ __device__ float raw2depth( float d ){
-    return clamp( 1.0f / (d * -0.0030711016f + 3.3309495161f), 0.f, 30.f);
+   //return clamp( 1.0f / (d * -0.0030711016f + 3.3309495161f), 0.f, 30.f);
+
+  return d*0.001f;
 }
 
 __global__ void raw2cooked( Image<float> depth, const Image<ushort> in ){
